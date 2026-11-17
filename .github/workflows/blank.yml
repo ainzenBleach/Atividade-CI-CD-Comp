@@ -7,23 +7,26 @@ on:
   pull_request:
     branches: [main]
 
-# Cancela execuções antigas da mesma branch/PR quando chega um push novo
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   JAVA_VERSION: "17"
+  APP_DIR: exemplo-action
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 permissions:
   contents: read
 
+# Todos os passos "run" executam dentro da subpasta do projeto
+defaults:
+  run:
+    working-directory: exemplo-action
+
 jobs:
-  # ---------------------------------------------------------------------------
-  # 1. BUILD: compila e empacota a aplicação (JAR executável do Spring Boot)
-  # ---------------------------------------------------------------------------
+  # 1. BUILD
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -49,7 +52,6 @@ jobs:
       - name: Preparar JAR para o Docker
         run: |
           mkdir -p dist
-          # ignora o "-plain.jar", que não é executável
           JAR=$(find build/libs -name '*.jar' ! -name '*-plain.jar' | head -n 1)
           cp "$JAR" dist/app.jar
 
@@ -57,13 +59,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-jar
-          path: dist/app.jar
+          path: ${{ env.APP_DIR }}/dist/app.jar
           if-no-files-found: error
           retention-days: 7
 
-  # ---------------------------------------------------------------------------
-  # 2. TESTES: executa os testes automatizados
-  # ---------------------------------------------------------------------------
+  # 2. TESTES
   test:
     name: Testes
     runs-on: ubuntu-latest
@@ -93,13 +93,11 @@ jobs:
         with:
           name: relatorio-testes
           path: |
-            build/reports/tests/test
-            build/test-results/test
+            ${{ env.APP_DIR }}/build/reports/tests/test
+            ${{ env.APP_DIR }}/build/test-results/test
           retention-days: 7
 
-  # ---------------------------------------------------------------------------
-  # 3. DOCKER: constrói a imagem e faz um smoke test (não publica)
-  # ---------------------------------------------------------------------------
+  # 3. DOCKER (build + smoke test, sem publicar)
   docker:
     name: Docker (build)
     runs-on: ubuntu-latest
@@ -112,7 +110,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: app-jar
-          path: .
+          path: ${{ env.APP_DIR }}
 
       - name: Configurar Buildx
         uses: docker/setup-buildx-action@v3
@@ -120,7 +118,7 @@ jobs:
       - name: Construir imagem (local)
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./${{ env.APP_DIR }}
           push: false
           load: true
           tags: app:ci
@@ -142,10 +140,7 @@ jobs:
           docker logs app
           exit 1
 
-  # ---------------------------------------------------------------------------
-  # 4. PUBLICAÇÃO: envia a imagem para o GitHub Container Registry (GHCR)
-  #    Só roda em push na main ou em tags v*, nunca em pull requests
-  # ---------------------------------------------------------------------------
+  # 4. PUBLICAÇÃO no GHCR (apenas push na main ou tags v*)
   publish:
     name: Publicar no GHCR
     runs-on: ubuntu-latest
@@ -162,7 +157,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: app-jar
-          path: .
+          path: ${{ env.APP_DIR }}
 
       - name: Configurar Buildx
         uses: docker/setup-buildx-action@v3
@@ -188,7 +183,7 @@ jobs:
       - name: Construir e publicar imagem
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./${{ env.APP_DIR }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
